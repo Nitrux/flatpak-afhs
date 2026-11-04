@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright 2026 <Nitrux Latinoamericana S.C. <hello@nxos.org>>
 
-set -euxo pipefail
+set -e
 
 upstream_url="https://github.com/flatpak/flatpak.git"
 debian_url="https://salsa.debian.org/debian/flatpak.git"
@@ -45,10 +45,10 @@ apt -qq update
 apt -qq -yy install equivs git devscripts lintian --no-install-recommends
 
 current_version="$(dpkg-parsechangelog --show-field Version)"
-nitrux_version="${version}+nitrux1"
+nitrux_version="${version}+nitrux1-1"
 if [[ "$current_version" != "$nitrux_version" ]]; then
     dch --newversion "$nitrux_version" --distribution nitrux \
-        --force-bad-version --maintmaint \
+        --force-distribution --maintmaint \
         "Handle hidden root entries when building the D-Bus proxy."
 fi
 
