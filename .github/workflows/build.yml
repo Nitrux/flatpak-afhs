@@ -42,7 +42,7 @@ jobs:
           apt update && apt -o Dpkg::Options::=--force-overwrite full-upgrade -y
 
       - name: Setup amd64 environment
-        run: apt install -y devscripts equivs git gnupg lintian ruby-full sudo
+        run: apt install -y devscripts equivs git gnupg lintian ruby-full sudo curl
 
       - run: gem install package_cloud
 
