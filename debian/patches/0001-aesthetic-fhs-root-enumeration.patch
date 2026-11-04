@@ -1,0 +1,158 @@
+From: Uri Herrera <uri_herrera@nxos.org>
+Date: Wed, 4 Nov 2026 00:00:00 -0600
+Subject: [PATCH] Handle hidden root entries when building the D-Bus proxy
+
+Flatpak builds the D-Bus proxy namespace by enumerating the root directory.
+With Aesthetic FHS, entries such as /usr and /lib are hidden from directory
+enumeration while remaining directly accessible by pathname. Enumerate the
+root paths needed by Nitrux explicitly so they can still be opened and bound
+without exposing them to the user-facing directory view.
+
+---
+ common/flatpak-run-dbus.c | 90 +++++++++++++++++++++++++++++++++--------------
+ 1 file changed, 64 insertions(+), 26 deletions(-)
+
+diff --git a/common/flatpak-run-dbus.c b/common/flatpak-run-dbus.c
+index 5d3c963e..6a3b5875 100644
+--- a/common/flatpak-run-dbus.c
++++ b/common/flatpak-run-dbus.c
+@@ -23,10 +23,56 @@
+ 
+ #include <glib/gi18n-lib.h>
+ 
++#include <sys/stat.h>
+ #include <sys/vfs.h>
+ 
+ #include "flatpak-utils-private.h"
+ 
++/* The root directory can be filtered by Aesthetic FHS.  Keep the list of
++   paths used to construct the proxy namespace explicit so hidden paths can
++   still be opened and bound by pathname. */
++static const char *const root_entries[] = {
++  "Applications",
++  "System",
++  "Users",
++  ".hidden",
++  "bin",
++  "boot",
++  "cdrom",
++  "configs",
++  "crypto_keyfile.bin",
++  "dev",
++  "etc",
++  "home",
++  "initrd.img",
++  "initrd.img.old",
++  "installed_pkgs_end.txt",
++  "installed_pkgs_start.txt",
++  "isodevice",
++  "kboot",
++  "lib",
++  "lib32",
++  "lib64",
++  "libx32",
++  "media",
++  "mnt",
++  "opt",
++  "proc",
++  "rofs",
++  "root",
++  "run",
++  "run-0",
++  "sbin",
++  "srv",
++  "sys",
++  "tmp",
++  "usr",
++  "var",
++  "vmlinuz",
++  "vmlinuz.old",
++  NULL,
++};
++
+ /* This wraps the argv in a bwrap call, primary to allow the
+    command to be run with a proper /.flatpak-info with data
+    taken from app_info_path */
+@@ -36,8 +82,7 @@ add_bwrap_wrapper (FlatpakBwrap *bwrap,
+                    GError      **error)
+ {
+   glnx_autofd int app_info_fd = -1;
+-  g_auto(GLnxDirFdIterator) dir_iter = { 0 };
+-  struct dirent *dent;
++  glnx_autofd int root_fd = -1;
+   g_autofree char *user_runtime_dir = flatpak_get_real_xdg_runtime_dir ();
+   g_autofree char *proxy_socket_dir = g_build_filename (user_runtime_dir, ".dbus-proxy/", NULL);
+ 
+@@ -45,52 +90,45 @@ add_bwrap_wrapper (FlatpakBwrap *bwrap,
+   if (app_info_fd == -1)
+     return glnx_throw_errno_prefix (error, _("Failed to open app info file"));
+ 
+-  if (!glnx_dirfd_iterator_init_at (AT_FDCWD, "/", FALSE, &dir_iter, error))
+-    return FALSE;
++  root_fd = open ("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
++  if (root_fd == -1)
++    return glnx_throw_errno_prefix (error, _("Failed to open root directory"));
+ 
+   flatpak_bwrap_add_arg (bwrap, flatpak_get_bwrap ());
+ 
+-  while (TRUE)
++  for (const char *const *entry = root_entries; *entry != NULL; entry++)
+     {
+       glnx_autofd int o_path_fd = -1;
++      struct stat st;
+       struct statfs stfs;
+ 
+-      if (!glnx_dirfd_iterator_next_dent_ensure_dtype (&dir_iter, &dent, NULL, error))
+-        return FALSE;
+-
+-      if (dent == NULL)
+-        break;
+-
+-      if (strcmp (dent->d_name, ".flatpak-info") == 0)
++      o_path_fd = openat (root_fd, *entry, O_PATH | O_NOFOLLOW | O_CLOEXEC);
++      if (o_path_fd == -1 || fstat (o_path_fd, &st) != 0 ||
++          fstatfs (o_path_fd, &stfs) != 0 || stfs.f_type == AUTOFS_SUPER_MAGIC)
+         continue;
+ 
+-      /* O_PATH + fstatfs is the magic that we need to statfs without automounting the target */
+-      o_path_fd = openat (dir_iter.fd, dent->d_name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+-      if (o_path_fd == -1 || fstatfs (o_path_fd, &stfs) != 0 || stfs.f_type == AUTOFS_SUPER_MAGIC)
+-        continue; /* AUTOFS mounts are risky and can cause us to block (see issue #1633), so ignore it. Its unlikely the proxy needs such a directory. */
+-
+-      if (dent->d_type == DT_DIR)
++      /* O_PATH + fstatfs is the magic that we need to statfs without automounting the target */
++      if (S_ISDIR (st.st_mode))
+         {
+-          if (strcmp (dent->d_name, "tmp") == 0 ||
+-              strcmp (dent->d_name, "var") == 0 ||
+-              strcmp (dent->d_name, "run") == 0)
++          if (strcmp (*entry, "tmp") == 0 ||
++              strcmp (*entry, "var") == 0 ||
++              strcmp (*entry, "run") == 0)
+             flatpak_bwrap_add_arg (bwrap, "--bind");
+           else
+             flatpak_bwrap_add_arg (bwrap, "--ro-bind");
+ 
+-          flatpak_bwrap_add_arg_printf (bwrap, "/%s", dent->d_name);
+-          flatpak_bwrap_add_arg_printf (bwrap, "/%s", dent->d_name);
++          flatpak_bwrap_add_arg_printf (bwrap, "/%s", *entry);
++          flatpak_bwrap_add_arg_printf (bwrap, "/%s", *entry);
+         }
+-      else if (dent->d_type == DT_LNK)
++      else if (S_ISLNK (st.st_mode))
+         {
+           g_autofree gchar *target = NULL;
+ 
+-          target = glnx_readlinkat_malloc (dir_iter.fd, dent->d_name,
+-                                           NULL, error);
++          target = glnx_readlinkat_malloc (root_fd, *entry, NULL, error);
+           if (target == NULL)
+             return FALSE;
+           flatpak_bwrap_add_args (bwrap, "--symlink", target, NULL);
+-          flatpak_bwrap_add_arg_printf (bwrap, "/%s", dent->d_name);
++          flatpak_bwrap_add_arg_printf (bwrap, "/%s", *entry);
+         }
+     }
+ 
+-- 
+2.47.3
