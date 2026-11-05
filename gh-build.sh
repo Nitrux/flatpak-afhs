@@ -53,6 +53,11 @@ awk -v packages=" flatpak libflatpak0 gir1.2-flatpak-1.0 " '
 mv "$build_dir/src/debian/control.tmp" "$build_dir/src/debian/control"
 cat "$build_dir/src/debian/libflatpak-dev.install" \
     >> "$build_dir/src/debian/not-installed"
+cat >> "$build_dir/src/debian/rules" <<'EOF'
+
+override_dh_girepository:
+	dh_girepository -ldebian/tmp/usr/share/gir-1.0
+EOF
 
 if ! grep -Fxq "$patch_name" "$build_dir/src/debian/patches/series"; then
     printf '%s\n' "$patch_name" >> "$build_dir/src/debian/patches/series"
