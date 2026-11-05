@@ -54,6 +54,11 @@ fi
 
 mk-build-deps -i -t "apt-get --yes" -r
 
+export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+$DEB_BUILD_OPTIONS }nodoc noautodbgsym nocheck"
+export DH_OPTIONS="-pflatpak -plibflatpak0 -pgir1.2-flatpak-1.0"
+
 debuild -b -uc -us
 
-find "$build_dir" -maxdepth 1 -type f -name '*.deb' -exec cp {} "$repo_dir" \;
+for package in flatpak libflatpak0 gir1.2-flatpak-1.0; do
+    cp "$build_dir"/"$package"_*.deb "$repo_dir"/
+done
