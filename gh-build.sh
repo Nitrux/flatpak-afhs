@@ -35,6 +35,23 @@ git clone --branch "$debian_ref" --depth=1 "$debian_url" "$build_dir/debian-pack
 cp -a "$build_dir/debian-packaging/debian" "$build_dir/src/debian"
 cp "$repo_dir/debian/patches/$patch_name" "$build_dir/src/debian/patches/$patch_name"
 
+awk -v packages=" flatpak libflatpak0 gir1.2-flatpak-1.0 " '
+    BEGIN { RS = ""; ORS = "\n\n" }
+    {
+        package = ""
+        count = split($0, lines, "\n")
+        for (i = 1; i <= count; i++) {
+            if (lines[i] ~ /^Package: /) {
+                split(lines[i], fields, /[[:space:]]+/)
+                package = fields[2]
+                break
+            }
+        }
+        if (package == "" || index(packages, " " package " ")) print
+    }
+' "$build_dir/src/debian/control" > "$build_dir/src/debian/control.tmp"
+mv "$build_dir/src/debian/control.tmp" "$build_dir/src/debian/control"
+
 if ! grep -Fxq "$patch_name" "$build_dir/src/debian/patches/series"; then
     printf '%s\n' "$patch_name" >> "$build_dir/src/debian/patches/series"
 fi
@@ -55,7 +72,6 @@ fi
 mk-build-deps -i -t "apt-get --yes" -r
 
 export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+$DEB_BUILD_OPTIONS }nodoc noautodbgsym nocheck"
-export DH_OPTIONS="-pflatpak -plibflatpak0 -pgir1.2-flatpak-1.0"
 
 debuild -b -uc -us
 
