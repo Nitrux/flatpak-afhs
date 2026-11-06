@@ -8,7 +8,7 @@ set -e
 upstream_url="https://github.com/flatpak/flatpak.git"
 debian_url="https://salsa.debian.org/debian/flatpak.git"
 debian_ref="${DEBIAN_REF:-debian/unstable}"
-version="${1:-1.18.4}"
+version="${1:?Usage: $0 <version|latest>}"
 patch_name="0001-aesthetic-fhs-root-enumeration.patch"
 
 if [[ "$version" == "latest" ]]; then
