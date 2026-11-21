@@ -69,11 +69,11 @@ apt -qq update
 apt -qq -yy install equivs git devscripts lintian --no-install-recommends
 
 current_version="$(dpkg-parsechangelog --show-field Version)"
-nitrux_version="${version}+nitrux1-1"
+nitrux_version="${version}+nitrux2-1"
 if [[ "$current_version" != "$nitrux_version" ]]; then
     dch --newversion "$nitrux_version" --distribution nitrux \
         --force-distribution --maintmaint \
-        "Handle hidden root entries when building the D-Bus proxy."
+        "Handle hidden root entries in the D-Bus proxy and host filesystem exports."
 fi
 
 mk-build-deps -i -t "apt-get --yes" -r

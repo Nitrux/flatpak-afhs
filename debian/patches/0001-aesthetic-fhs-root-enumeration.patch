@@ -1,16 +1,19 @@
 From: Uri Herrera <uri_herrera@nxos.org>
 Date: Wed, 4 Nov 2026 00:00:00 -0600
-Subject: [PATCH] Handle hidden root entries when building the D-Bus proxy
+Subject: [PATCH] Handle hidden root entries in Flatpak namespaces
 
 Flatpak builds the D-Bus proxy namespace by enumerating the root directory.
 With Aesthetic FHS, entries such as /usr and /lib are hidden from directory
 enumeration while remaining directly accessible by pathname. Enumerate the
 root paths needed by Nitrux explicitly so they can still be opened and bound
-without exposing them to the user-facing directory view.
+without exposing them to the user-facing directory view. Also include hidden
+entries when exporting the host filesystem to applications, while retaining
+Flatpak's root path exclusions.
 
 ---
+ common/flatpak-context.c  | 31 +++++++++++++++++++++++++++++++
  common/flatpak-run-dbus.c | 90 +++++++++++++++++++++++++++++++++--------------
- 1 file changed, 64 insertions(+), 26 deletions(-)
+ 2 files changed, 95 insertions(+), 26 deletions(-)
 
 diff --git a/common/flatpak-run-dbus.c b/common/flatpak-run-dbus.c
 index 5d3c963e..6a3b5875 100644
@@ -154,5 +157,61 @@ index 5d3c963e..6a3b5875 100644
          }
      }
  
+diff --git a/common/flatpak-context.c b/common/flatpak-context.c
+index 11a2f66..75a5601 100644
+--- a/common/flatpak-context.c
++++ b/common/flatpak-context.c
+@@ -3832,6 +3832,15 @@ flatpak_context_export (FlatpakContext *context,
+     {
+       DIR *dir;
+       struct dirent *dirent;
++      g_autoptr(GHashTable) seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
++      static const char *const hidden_root_entries[] = {
++        ".hidden", "bin", "boot", "cdrom", "configs", "crypto_keyfile.bin",
++        "dev", "etc", "home", "initrd.img", "initrd.img.old",
++        "installed_pkgs_end.txt", "installed_pkgs_start.txt", "isodevice",
++        "kboot", "lib", "lib32", "lib64", "libx32", "media", "mnt",
++        "opt", "proc", "rofs", "root", "run", "run-0", "sbin", "srv",
++        "sys", "tmp", "usr", "var", "vmlinuz", "vmlinuz.old", NULL
++      };
+
+       g_info ("Allowing host-fs access");
+       home_access = TRUE;
+@@ -3844,6 +3853,7 @@ flatpak_context_export (FlatpakContext *context,
+             {
+               g_autofree char *path = NULL;
+
++              g_hash_table_add (seen, g_strdup (dirent->d_name));
+               if (g_strv_contains (dont_mount_in_root, dirent->d_name))
+                 continue;
+
+@@ -3867,6 +3877,27 @@ flatpak_context_export (FlatpakContext *context,
+           closedir (dir);
+         }
+
++      /* Aesthetic FHS can hide root entries from readdir while leaving them
++       * accessible by pathname. Include them in host exports when permitted. */
++      for (const char *const *entry = hidden_root_entries; *entry != NULL; entry++)
++        {
++          g_autofree char *path = NULL;
++
++          if (g_hash_table_contains (seen, *entry) ||
++              g_strv_contains (dont_mount_in_root, *entry))
++            continue;
++
++          path = g_build_filename ("/", *entry, NULL);
++          if (!flatpak_exports_add_path_expose (exports, fs_mode, path, &local_error))
++            {
++              if (g_error_matches (local_error, G_IO_ERROR, G_IO_ERROR_NOT_MOUNTABLE_FILE))
++                local_error->code = G_IO_ERROR_FAILED_HANDLED;
++
++              log_cannot_export_error (fs_mode, path, local_error);
++              g_clear_error (&local_error);
++            }
++        }
++
+       if (!flatpak_exports_add_path_expose (exports, fs_mode, "/run/media", &local_error))
+         {
+           log_cannot_export_error (fs_mode, "/run/media", local_error);
 -- 
 2.47.3
